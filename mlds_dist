@@ -1,0 +1,7 @@
+HOSTS = ( mlds_db4_3 mlds_db4_4 mlds_db4_5 )
+FILES = ( /etc/syslog.conf )
+${FILES} -> ${HOSTS}
+install; 
+special "/usr/local/bin/killproc syslogd";
+special "/usr/etc/syslogd";
+#notify gregc@ml.com;

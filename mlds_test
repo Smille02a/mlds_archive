@@ -1,0 +1,98 @@
+#!/bin/ksh
+chk_space()
+{
+# cnt      0         1       2        3                4       5
+# cnt   PARTITION  KBYTES  USED    AVAILIBLE          CAP  FILESYSTEM
+# 1/9:  /dev/sd1e  1958134  717720  1201252           37  /store
+# 2/10: /dev/sd1f  1958134  1227516  691456           64  /export/delivery
+# 3/11: /dev/sd1g  1958134  1064087  854885           55  /export/arrival
+# 4/12: /dev/sd1h  1908144  1795932  74050            96  /export/logs
+# 5/13: /dev/sd2f  1958134  536554  1225767           30  /export/arrival2
+# 6/14: /dev/sd2g  1958134  239463  1522858           14  /export/archives
+# 7/15: /dev/sd2h  1908144  337847  1379483           20  /export/archives2
+# 8/16: /dev/sd2e  1958134  1074178  688143           61  /export/caches
+
+df -t 4.2 |egrep -v -e "Filesystem|sd0|^#|^\$" > /tmp/tmpfile
+lcount=`cat /tmp/tmpfile |wc -l`
+exec 7</tmp/tmpfile
+while [ $cnt -ne $lcount ]
+do
+	let cnt=cnt+1
+	read -u7 TMPLINE
+	set +A LINE_ARRAY $TMPLINE
+	ARRAY_LEN=${#LINE_ARRAY[*]}
+	PARTITION[cnt]=`echo ${LINE_ARRAY[0]}`
+	KBYTES[cnt]=`echo ${LINE_ARRAY[1]}`
+	USED[cnt]=`echo ${LINE_ARRAY[2]}`
+	AVAIL[cnt]=`echo ${LINE_ARRAY[3]}`
+	CAP[cnt]=`echo ${LINE_ARRAY[4]}|cut -d "%" -f1`
+	FILESYSTEM[cnt]=`echo ${LINE_ARRAY[5]}`
+done	
+if [  ${AVAIL[6]} -gt ${AVAIL[7]} ]; then
+	ARCHIVE_BL=${FILESYSTEM[6]}
+	ARCHIVE_DIR="$ARCHIVE_BL/$DATE"
+else
+	ARCHIVE_BL=${FILESYSTEM[7]}
+	ARCHIVE_DIR="$ARCHIVE_BL/$DATE"
+fi
+}
+show_space()
+{
+  print "\n\t Current disk statistics for `hostname` are: \n" >> $LOGFILE
+  df -t 4.2 |egrep -v -e "sd0|^#|^\$" >> $LOGFILE
+  print "\n\t Previous disk statistics for `hostname` were: \n" >> $LOGFILE
+  cat /tmp/tmpfile >> $LOGFILE
+	pre_fs1=${AVAIL[1]}
+	pre_fs3=${AVAIL[3]}
+	pre_fs6=${AVAIL[6]}
+	pre_fs7=${AVAIL[7]}
+  cnt=0
+  chk_space
+  print "\n\t Changes for affected filesystems are as follows: \n" >> $LOGFILE
+  print " Filesystem\t\t Before\t  After"
+  print " ----------\t\t ------\t  -----"
+  print " ${FILESYSTEM[1]}\t\t\t  $pre_fs1  ${AVAIL[1]} " >> $LOGFILE
+  print " ${FILESYSTEM[3]}\t  $pre_fs3  ${AVAIL[3]} " >> $LOGFILE
+  print " ${FILESYSTEM[6]}\t  $pre_fs6  ${AVAIL[6]} " >> $LOGFILE
+  print " ${FILESYSTEM[7]}\t  $pre_fs7  ${AVAIL[7]} " >> $LOGFILE
+}
+
+##################################################################
+## MAIN
+##################################################################
+#
+cnt=0
+VERSION="/usr/local/bin/mlds_test"
+DATE=`date +%m%d%y`
+HOST=`hostname`
+STORE_DIR="/store"
+ARRIVAL_DIR="/export/arrival"
+LOGFILE="/tmp/mlds_test_$DATE.log"
+ERRLOG="/tmp/mlds_test_$DATE.err"
+COMPRESS="/usr/local/bin/gzip -fqr"
+BEEP="/usr/local/bin/beep"
+#
+>$LOGFILE
+#
+chk_space  >> $LOGFILE
+#
+print "\nThis logfile file has been created  on `date` "  >> $LOGFILE
+print "\n\tHostname:    `hostname`" >> $LOGFILE
+print "\tScript name: $VERSION"  >> $LOGFILE
+print "\tLog file:    $LOGFILE\n"  >> $LOGFILE
+print "It depicts the status of archival process for filesystems:" >> $LOGFILE
+print "\n\t$STORE_DIR\n\t$ARRIVAL_DIR\n\nwhich are archived into"  >> $LOGFILE
+print "\n\t$ARCHIVE_DIR\n\n for this run of the script. - SWM\n\n" >> $LOGFILE
+#
+if [ -d  $ARCHIVE_DIR  ]; then
+    print "\n`date`\n\tRemoving $ARCHIVE_DIR from $ARCHIVE_BL"  >> $LOGFILE
+    rmdir  $ARCHIVE_DIR
+    print "\tSuccessfully Removed $ARCHIVE_DIR from $ARCHIVE_BL"  >> $LOGFILE
+    mkdir $ARCHIVE_DIR
+    print "\tSuccessfully created $ARCHIVE_DIR"  >> $LOGFILE
+else
+    mkdir $ARCHIVE_DIR
+    print "\n`date`\n\tSuccessfully created $ARCHIVE_DIR"  >> $LOGFILE
+fi
+#
+show_space >> $LOGFILE

@@ -1,0 +1,227 @@
+#!/bin/ksh
+##################################################################
+#
+#       Archive Store and Arrival Script
+#       /usr/local/bin/mlds_archive.R8
+#
+#       Created:   04/18/95
+#       Modified:  07/23/95
+#
+#       Merrill Lynch
+#       Stephen Miller, SA
+#               Phone:  (212)
+#               Beeper: (800) 225-0256 pin 95684
+#               email:  smiller@ml.com
+#
+#       This file is designed to be run by cron as root on mlds_ev401
+#	once per week at 0200 Saterday morning.
+#
+#       It will archive data in /store and .arrival into filesystem
+#       /export/archives under directory `date +%m%d%y`.
+#       Within /export/archives/`date +%m%d%y` there will be two
+#	compressed directories.  These are store and arrival, 
+#	Coresponding to the root nodes.
+#
+#	Note that files within /store having _tmp or _map in their
+#	file names will be deleated BEFORE the archive process
+#	takes place.
+#
+##################################################################
+#
+rm_tmp_store()
+{
+print "\n`date`\n\tRemoving $STORE_DIR/{*_map*,*_tmp*} files"
+if `find $STORE_DIR/.  \( -name  '*_map*' -o -name '*_tmp*' \) \
+	-exec $rm {} \;  >> $LOGFILE 2>&1`; then
+	print "\tSuccessfully Removed *_map* *_tmp* from /store"
+else
+	print "\tNo *_map* *_tmp* files were removed from /store"
+fi
+}
+bak_store()
+{
+cd $ARCHIVE_DIR
+print "\n`date`\n\tArchiving /store into $ARCHIVE_DIR/store"
+if `tar cf - -C / store |tar xf - >> $LOGFILE 2>&1`;  then 
+	print "\tSuccessfully performed /store tar into $DATE Dir"
+	print "\tCompressing files inside $ARCHIVE_DIR/store"
+	cd  $ARCHIVE_DIR/store
+	$rm *_tmp*  >> $LOGFILE 2>&1
+	$rm *_map*  >> $LOGFILE 2>&1
+	if `find . -type f -exec $COMPRESS  {} \; >> $LOGFILE 2>&1`;  then
+		print "\tSuccessfully Completed Compress stage"
+	fi
+else
+	print "\tThe archive of /export/store exited with error, aborting..."
+	exit 1
+fi
+}
+rm_store()
+{
+print "\n`date`\n\tRemoving $STORE_DIR files older than two days now"
+if `find $STORE_DIR/.  -type f  -mtime +2  -exec $rm {} \; >> $LOGFILE 2>&1`; then
+	print "\tSuccessfully Removed /store files two days old"
+else
+	print "\tNo files were removed from /store"
+fi
+}
+bak_arrival()
+{
+print "\n`date`\n\tArchiving $ARRIVAL_DIR done files into $ARCHIVE_DIR/arrival"
+mkdir $ARCHIVE_DIR/arrival >> $LOGFILE 2>&1
+if `find $ARRIVAL_DIR/.  -name '*_done*'  -exec $cp {} $ARCHIVE_DIR/arrival/ \; >> $LOGFILE 2>&1`; then
+	print "\tSuccessfully Copied done files into $ARCHIVE_DIR"
+else
+	print "\ttNo files were Copied into $ARCHIVE_DIR"
+fi
+print "\tCompressing files inside $ARCHIVE_DIR/arrival"
+cd  $ARCHIVE_DIR/arrival
+if `find . -type f -exec $COMPRESS  {} \; >> $LOGFILE 2>&1`;then
+	print "\tSuccessfully Completed Compress stage"
+else
+	print "\tThe archive of $ARRIVAL_DIR exited with error"
+	exit 1
+fi
+}
+
+rm_arrival()
+{
+print "\n`date`\n\tRemoving $ARRIVAL_DIR *_done* files older than two days"
+if `find $ARRIVAL_DIR/.  -name '*_done*'  -mtime +2  -exec $rm {} \; >> $LOGFILE 2>&1`; then 
+	 print "\tSuccessfully Removed  $ARRIVAL_DIR  files two days old"
+else
+	print "\tNo files were removed from $ARRIVAL_DIR"
+fi
+}	
+chk_space()
+{
+# cnt      0         1       2        3                4       5
+# cnt   PARTITION  KBYTES  USED    AVAILIBLE          CAP  FILESYSTEM
+# 1/9:  /dev/sd1e  1958134  717720  1201252           37  /store
+# 2/10: /dev/sd1f  1958134  1227516  691456           64  /export/delivery
+# 3/11: /dev/sd1g  1958134  1064087  854885           55  /export/arrival
+# 4/12: /dev/sd1h  1908144  1795932  74050            96  /export/logs
+# 5/13: /dev/sd2f  1958134  536554  1225767           30  /export/arrival2
+# 6/14: /dev/sd2g  1958134  239463  1522858           14  /export/archives
+# 7/15: /dev/sd2h  1908144  337847  1379483           20  /export/archives2
+# 8/16: /dev/sd2e  1958134  1074178  688143           61  /export/caches
+
+df -t 4.2 |egrep -v -e "Filesystem|sd0|^#|^\$" > /tmp/tmpfile
+lcount=`cat /tmp/tmpfile |wc -l`
+exec 7</tmp/tmpfile
+while [ $cnt -ne $lcount ]
+do
+	let cnt=cnt+1
+	read -u7 TMPLINE
+	set +A LINE_ARRAY $TMPLINE
+	ARRAY_LEN=${#LINE_ARRAY[*]}
+	PARTITION[cnt]=`echo ${LINE_ARRAY[0]}`
+	KBYTES[cnt]=`echo ${LINE_ARRAY[1]}`
+	USED[cnt]=`echo ${LINE_ARRAY[2]}`
+	AVAIL[cnt]=`echo ${LINE_ARRAY[3]}`
+	CAP[cnt]=`echo ${LINE_ARRAY[4]}|cut -d "%" -f1`
+	FILESYSTEM[cnt]=`echo ${LINE_ARRAY[5]}`
+done	
+if [  ${AVAIL[6]} -gt ${AVAIL[7]} ]; then
+	ARCHIVE_BL=${FILESYSTEM[6]}
+	ARCHIVE_DIR="$ARCHIVE_BL/$DATE"
+else
+	ARCHIVE_BL=${FILESYSTEM[7]}
+	ARCHIVE_DIR="$ARCHIVE_BL/$DATE"
+fi
+}
+show_space()
+{
+  print "\n\t Current disk statistics for `hostname` are: \n" >> $LOGFILE
+  df -t 4.2 |egrep -v -e "sd0|^#|^\$" >> $LOGFILE
+  print "\n\t Previous disk statistics for `hostname` were: \n" >> $LOGFILE
+  cat /tmp/tmpfile >> $LOGFILE
+        pre_fs9=${AVAIL[9]}
+        pre_fs2=${AVAIL[2]}
+        pre_fs6=${AVAIL[6]}
+        pre_fs7=${AVAIL[7]}
+  cnt=0
+  chk_space
+  print "\n\t Changes for affected filesystems are as follows: \n" >> $LOGFILE
+  print " Filesystem\t\t Before\t  After" >> $LOGFILE
+  print " ----------\t\t ------\t  -----\n"  >> $LOGFILE
+  print " ${FILESYSTEM[1]}\t\t\t  $pre_fs9  ${AVAIL[9]} " >> $LOGFILE
+  print " ${FILESYSTEM[3]}\t  $pre_fs2  ${AVAIL[2]} " >> $LOGFILE
+  print " ${FILESYSTEM[7]}\t  $pre_fs6  ${AVAIL[6]} " >> $LOGFILE
+  print " ${FILESYSTEM[8]}\t  $pre_fs7  ${AVAIL[7]} " >> $LOGFILE
+  print "\n`date`\n\tDONE\n" >> $LOGFILE
+}
+
+##################################################################
+## MAIN
+##################################################################
+#
+cnt=0
+VERSION="/usr/local/bin/mlds_archive.R8"
+DATE=`date +%m%d%y`
+HOST=`hostname`
+STORE_DIR="/store"
+ARRIVAL_DIR="/export/arrival"
+LOGFILE="/tmp/mlds_archive_$DATE.log"
+ERRLOG="/tmp/mlds_archive_$DATE.err"
+rm="/bin/rm -fr"
+cp="/bin/cp -p"
+COMPRESS="/usr/local/bin/gzip -fqr"
+BEEP="/usr/local/bin/beep"
+#
+>$LOGFILE
+#
+chk_space
+#
+print "\nThis logfile file has been created  on `date` "  >> $LOGFILE
+print "\n\tHostname:    `hostname`" >> $LOGFILE
+print "\tScript name: $VERSION"  >> $LOGFILE
+print "\tLog file:    $LOGFILE\n"  >> $LOGFILE
+print "It depicts the status of archival process for filesystems:" >> $LOGFILE
+print "\n\t$STORE_DIR\n\t$ARRIVAL_DIR\n\nwhich are archived into"  >> $LOGFILE
+print "\n\t$ARCHIVE_DIR\n\nfor this run of the script. - SWM\n\n" >> $LOGFILE
+#
+if [ -d  $ARCHIVE_DIR  ]; then
+    print "\n`date`\n\tRemoving $ARCHIVE_DIR from $ARCHIVE_BL"  >> $LOGFILE
+    $rm -fr  $ARCHIVE_DIR
+    print "\tSuccessfully Removed $ARCHIVE_DIR from $ARCHIVE_BL"  >> $LOGFILE
+    mkdir $ARCHIVE_DIR
+    print "\tSuccessfully created $ARCHIVE_DIR"  >> $LOGFILE
+else
+    mkdir $ARCHIVE_DIR
+    print "\n`date`\n\tSuccessfully created $ARCHIVE_DIR"  >> $LOGFILE
+fi
+#
+if `rm_tmp_store >> $LOGFILE 2>&1`; then
+  if `bak_store >> $LOGFILE 2>&1`; then
+    if `rm_store >> $LOGFILE 2>&1`; then
+      if `bak_arrival >> $LOGFILE 2>&1`; then
+        if `rm_arrival >> $LOGFILE 2>&1`; then
+          status="success"
+        else
+          status="failure"
+        fi
+      sleep 1
+      fi
+    sleep 1
+    fi
+  sleep 1
+  fi
+fi
+show_space
+if [ "$status" = "success" ]; then
+        print "\n`date`\n\tArchive Process Exited Sucessfully on `hostname`" \
+            >> $LOGFILE
+        cat $LOGFILE | /usr/ucb/mail \
+           -s "`hostname`: Archival Report on $DATE" sysdoc mlds_admin >> $LOGFILE
+        $BEEP smiller `hostname` Archive on $DATE succeeded! >> $LOGFILE
+else
+        print "\n`date`\n\tArchive Process Exited with ERROR on `hostname`" \
+           >> $LOGFILE
+        cat $LOGFILE | /usr/ucb/mail  -s "`hostname`: Archival Error on $DATE" \
+          sysdoc mlds_admin >> $LOGFILE
+        $BEEP mlds_admin `hostname` Archive on $DATE failed >> $LOGFILE
+fi
+##################################################################
+## DONE
+##################################################################
